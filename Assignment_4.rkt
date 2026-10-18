@@ -67,9 +67,17 @@
     [(primV _) "#<primop>"]))
 
 ;; extend current environment to include interpretations of arguments
-(define (extend-env [args : (Listof binding)] [curr-env : Env]) : Env
-  (for/list ([a args])
-    (interp a curr-env)))
+(define (extend-env [a-names : (Listof Symbols)] [args : (Listof ExprC)] [curr-env : Env]) : Env
+  (match a-names
+    ['() curr-env]
+    [(cons f r) (cons (binding f (interp (first args) curr-env))
+                      (extend-env r (rest args) curr-env))]))
+
+;; get all symbols of args from a lambC
+(define (get-args [a : (Listof idC)]) : (Listof Symbol)
+  (match a
+    ['() '()]
+    [(cons f r) (cons (idC-i f) (get-args r))]))
 
 ;; top environment
 (define top-env (list
@@ -85,22 +93,15 @@
     ;; idC 
     [(idC i) (lookup i env)]
     ;; lambC
-    [(lambC a b)
-     ;; get all ids of lambda args
-     (local ([define args (for/list ([i a])
-       (idC-i i))]))
-     ;; make a closure for the lambC
-     (cloV args b env)]
+    [(lambC a b) (cloV (get-args a) b env)]
     ;; appC
     [(appC f a)
      ;; get relevant closure
-     (local ([define f-value (interp f env)])
+     (local ([define clo-f (interp f env)])
        ;; interp body w extened env
-       (interp (cloV-body f-value)
+       (interp (cloV-body clo-f)
                ;; extend current env with interpretations of args
-               (extend-env (binding (cloV-args f-value)
-                                    (interp a env))
-                           (cloV-env f-value))))]))
+               (extend-env (cloV-args clo-f) a (cloV-env clo-f))))]))
 
 ;; top-interp
 (define (top-interp [s : Sexp]) : String
