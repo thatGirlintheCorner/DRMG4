@@ -37,83 +37,6 @@
 (struct cloV ([args : (Listof Symbol)] [body : ExprC] [env : Env]) #:transparent)
 (struct primV ([op : Symbol] ) #:transparent)
 
-;; check-id
-;; check for the validity of ids
-(define (check-id [id : Symbol]) : Boolean
-  (cond
-    [(equal? id 'if) #f]
-    [(equal? id '=) #f]
-    [(equal? id 'local) #f]
-    [(equal? id '%) #f]
-    [(equal? id '->) #f]
-    [(equal? id 'in) #f]
-    [else #t]))
-
-;; lookup
-;; look up binding in current environment
-(define (lookup [for : symbol] [env : Env]) : Value
-  (match env
-    ['() (error 'lookup "DRMG: ~e not found in environment" for)]
-    [(cons (binding name val) r) (if (check-id name) (cond
-                                   [(symbol=? for name) val]
-                                   [else (lookup for r)])
-                                     (error 'lookup "DRMG: ~e must be a valid id name" for))]))
-
-;; serialize
-;; takes in a value from DRMG4 and returns a string
-(define (serialize [val : Value]) : String
-  (match val
-    [(numV n) (format "~v" n)]
-    [(boolV b) (if b "true" "false")]
-    [(strV s) (format "~v" s)]
-    [(cloV _ _ _) "#<procedure>"]
-    [(primV _) "#<primop>"]))
-
-;; extend-env
-;; extend current environment to include interpretations of arguments
-(define (extend-env [a-names : (Listof Symbols)] [args : (Listof ExprC)] [curr-env : Env]) : Env
-  (match a-names
-    ['() curr-env]
-    [(cons f r) (cons (binding f (interp (first args) curr-env))
-                      (extend-env r (rest args) curr-env))]))
-
-;; get-args
-;; get all symbols of args from a lamC
-(define (get-args [a : (Listof idC)]) : (Listof Symbol)
-  (match a
-    ['() '()]
-    [(cons f r) (cons (idC-i f) (get-args r))]))
-
-;; calc-op
-;; calculate output for similar operations
-(define (calc-op [op : symbol] [args : (Listof ExprC)] [env : Env]) : Value
-  (if (= 2 (length args))
-            (local [(define a (interp (first args) env))
-                    (define b (interp (first (rest args)) env))]
-              (if (numV? a)
-                  (if (numV? b)
-                      (if (= b 0)
-                          (error 'calc-op "DRMG: cannot divide by zero for ~e/~e" a b)
-                          (numV (op a b)))
-                      (error 'calc-op "DRMG: ~e must be applied to numbers only" op))
-                  (error 'calc-op "DRMG: ~e must be applied to numbers only" op)))
-            (error 'calc-op "DRMG: ~e can only take 2 arguments" op)))
-
-;; apply-op
-;; apply the primitive operations two to values
-(define (apply-op [op : symbol] [args : (Listof ExprC)] [env : Env]) : Value
-  (match op
-    ['+ (calc-op op args env)]
-    ['- (calc-op op args env)]
-    ['* (calc-op op args env)]
-    ['/ (calc-op op args env)]
-    ['<= (calc-op op args env)]
-    #;(['substring ]
-    ['strlen ]
-    ['equal? (if (= 2 (length args))
-                 )]
-    ['error ])))
-
 ;; top environment
 (define top-env (list
                  (binding 'true (boolV #t))
@@ -127,6 +50,88 @@
                  (binding 'strlen (primV 'strlen))
                  (binding 'equal? (primV 'equal?))
                  (binding 'error (primV 'error))))
+
+;; check-id
+;; check for the validity of ids
+(define (check-id [id : Symbol]) : Boolean
+  (cond
+    [(equal? id 'if) #f]
+    [(equal? id '=) #f]
+    [(equal? id 'local) #f]
+    [(equal? id '%) #f]
+    [(equal? id '->) #f]
+    [(equal? id 'in) #f]
+    [else #t]))
+
+(check-equal? (check-id 'if) #f)
+(check-equal? (check-id '=) #f)
+(check-equal? (check-id 'local) #f)
+(check-equal? (check-id '%) #f)
+(check-equal? (check-id '->) #f)
+(check-equal? (check-id 'in) #f)
+(check-equal? (check-id 'hi) #t)
+
+;; serialize
+;; takes in a value from DRMG4 and returns a string
+(define (serialize [val : Value]) : String
+  (match val
+    [(numV n) (format "~v" n)]
+    [(boolV b) (if b "true" "false")]
+    [(strV s) (format "~v" s)]
+    [(cloV _ _ _) "#<procedure>"]
+    [(primV _) "#<primop>"]))
+
+(check-equal? (serialize (numV 3)) "3")
+(check-equal? (serialize (boolV #t)) "true")
+(check-equal? (serialize (boolV #f)) "false")
+(check-equal? (serialize (strV "hello")) "\"hello\"")
+(check-equal? (serialize (cloV '() (numC 3) '())) "#<procedure>")
+(check-equal? (serialize (primV '+)) "#<primop>")
+
+;; lookup
+;; look up binding in current environment
+(define (lookup [for : Symbol] [env : Env]) : Value
+  (match env
+    ['() (error 'lookup "DRMG: ~e not found" for)]
+    [(cons (binding name val) r)
+     (if (check-id name) (cond
+                           [(symbol=? for name) val]
+                           [else (lookup for r)])
+         (error 'lookup "DRMG: ~e is not a valid name" for))]))
+
+;; extend-env
+;; extend current environment to include interpretations of arguments
+(define (extend-env [a-names : (Listof Symbol)] [args : (Listof Value)] [clo-env : Env]) : Env
+  (match* (a-names args)
+    [('() '()) clo-env]
+    [('() l) (error 'extend-env "DRMG: ~e must have associated names" l)]
+    [(l '()) (error 'extend-env "DRMG: ~e must have associated values" l)]
+    [((cons f-names r-names) (cons f-args r-args))
+     (cons (binding f-names f-args)
+           (extend-env r-names r-args clo-env))]))
+
+;; get-args
+;; get all symbols of args from a lamC
+(define (get-args [a : (Listof idC)]) : (Listof Symbol)
+  (match a
+    ['() '()]
+    [(cons f r) (cons (idC-i f) (get-args r))]))
+
+;; apply-op
+;; apply the primitive operations to given values
+(define (apply-op [op : Symbol] [vals : (Listof Value)]) : Value
+  (match* (op vals)
+    [('+ (list (numV a) (numV b))) (numV (+ a b))]
+    [('- (list (numV a) (numV b))) (numV (- a b))]
+    [('* (list (numV a) (numV b))) (numV (* a b))]
+    [('/ (list (numV a) (numV b)))
+     (if (= b 0)
+         (error 'apply-op "DRMG: cannot divide ~e by 0" a)
+         (numV (/ a b)))]
+    [('<= (list (numV a) (numV b))) (boolV (<= a b))]
+    #;[('substring (list (strV s) (numV start) (numV stop)))
+       (strV (substring s start stop))]
+    [('strlen (list (strV s))) (numV (string-length s))]))
 
 ;; parse
 
@@ -143,14 +148,17 @@
     ;; lamC
     [(lamC a b) (cloV (get-args a) b env)]
     ;; appC
-    [(appC f a)
+    [(appC f as)
+     (define vals : (Listof Value)
+       (for/list ([a as])
+         (interp a env)))
      (match (interp f env)
-       [(cloV args body clo-env)
-          ;; interp body w extened env
-          (interp body
-                  ;; extend current env with interpretations of args
-                  (extend-env args a clo-env))]
-       [(primV op) (apply-op op a env)]
+       [(cloV syms body clo-env)
+        ;; interp body w extened env
+        (interp body
+                ;; extend current env with interpretations of args
+                (extend-env syms vals clo-env))]
+       [(primV op) (apply-op op vals)]
        [other (error 'interp "DRMG: ~e must be a valid function" other)])]
     ;; ifC
     [(ifC c t f)
@@ -159,8 +167,53 @@
        [(boolV #f) (interp f env)]
        [other (error 'interp "DRMG: ~e must evaluate to a boolean value" other)])]))
 
+(check-equal? (interp (numC 3) top-env) (numV 3))
+(check-equal? (interp (strC "hello") top-env) (strV "hello"))
+(check-equal? (interp (ifC (appC (idC '<=) (list (numC 2) (numC 3)))
+                           (numC 2) (numC 3)) top-env) (numV 2))
+(check-equal? (interp (ifC (appC (idC '<=) (list (numC 3) (numC 2)))
+                           (numC 2) (numC 3)) top-env) (numV 3))
+(check-equal? (interp (appC (lamC (list (idC 'x))
+                                  (appC (idC '+) (list (numC 2) (idC 'x))))
+                            (list (numC 1))) top-env) (numV 3))
+(check-equal? (interp (appC (lamC (list (idC 'x))
+                                  (appC (idC '-) (list (numC 2) (idC 'x))))
+                            (list (numC 1))) top-env) (numV 1))
+(check-equal? (interp (appC (lamC (list (idC 'x))
+                                  (appC (idC '*) (list (numC 2) (idC 'x))))
+                            (list (numC 1))) top-env) (numV 2))
+(check-equal? (interp (appC (lamC (list (idC 'x))
+                                  (appC (idC '/) (list (numC 2) (idC 'x))))
+                            (list (numC 1))) top-env) (numV 2))
+(check-exn (regexp (regexp-quote "DRMG: cannot divide 2 by 0"))
+           (lambda () (interp (appC (lamC (list (idC 'x))
+                                          (appC (idC '/) (list (numC 2) (idC 'x))))
+                                    (list (numC 0))) top-env)))
+(check-equal? (interp (appC (idC 'strlen) (list (strC "hello"))) top-env) (numV 5))
+(check-exn (regexp (regexp-quote "DRMG: (numV 1) must evaluate to a boolean value"))
+           (lambda () (interp (ifC (appC (idC '/) (list (numC 2) (numC 2)))
+                                   (numC 2)
+                                   (numC 1)) top-env)))
+(check-exn (regexp (regexp-quote "DRMG: (boolV #t) must be a valid function"))
+           (lambda () (interp (appC (idC 'true) (list (numC 2) (numC 2))) top-env)))
+(check-exn (regexp (regexp-quote "DRMG: 'hi not found"))
+           (lambda () (interp (appC (idC '-) (list (numC 3) (idC 'hi))) top-env)))
+(check-exn (regexp (regexp-quote "DRMG: 'local is not a valid name"))
+           (lambda () (interp (appC (lamC (list (idC 'local))
+                                          (appC (idC '+) (list (numC 2) (idC 'local))))
+                                    (list (numC 1))) top-env)))
+(check-exn (regexp (regexp-quote "DRMG: (list (numV 2)) must have associated names"))
+           (lambda () (interp (appC (lamC (list (idC 'x))
+                                          (appC (idC '+) (list (numC 2) (idC 'x))))
+                                    (list (numC 1) (numC 2))) top-env)))
+(check-exn (regexp (regexp-quote "DRMG: '(y) must have associated values"))
+           (lambda () (interp (appC (lamC (list (idC 'x) (idC 'y))
+                                          (appC (idC '+) (list (idC 'x) (idC 'y))))
+                                    (list (numC 1))) top-env)))
+
+
 ;; top-interp
 ;; calls parse and interp on a given program
 ;; returns a string of the included ExprC's and the final result
-(define (top-interp [s : Sexp]) : String
-  (serialize (interp (parse s) top-env)))
+#;(define (top-interp [s : Sexp]) : String
+    (serialize (interp (parse s) top-env)))
