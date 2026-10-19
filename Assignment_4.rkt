@@ -57,7 +57,7 @@
     [(cons (binding name val) r) (if (check-id name) (cond
                                    [(symbol=? for name) val]
                                    [else (lookup for r)])
-                                     (error 'lookup "DRMG: ~e is an invalid id name" for))]))
+                                     (error 'lookup "DRMG: ~e must be a valid id name" for))]))
 
 ;; serialize
 ;; takes in a value from DRMG4 and returns a string
@@ -110,7 +110,8 @@
     ['<= (calc-op op args env)]
     #;(['substring ]
     ['strlen ]
-    ['equal? (if (= 2 (length args)))]
+    ['equal? (if (= 2 (length args))
+                 )]
     ['error ])))
 
 ;; top environment
@@ -134,7 +135,9 @@
 (define (interp [exp : ExprC] [env : Env]) : Value
   (match exp
     ;; numC
-    [(numC n) n]
+    [(numC n) (numV n)]
+    ;; strC
+    [(strC s) (strV s)]
     ;; idC 
     [(idC i) (lookup i env)]
     ;; lamC
@@ -148,7 +151,13 @@
                   ;; extend current env with interpretations of args
                   (extend-env args a clo-env))]
        [(primV op) (apply-op op a env)]
-       [other (error 'interp "DRMG: ~e is not a valid function" other)])]))
+       [other (error 'interp "DRMG: ~e must be a valid function" other)])]
+    ;; ifC
+    [(ifC c t f)
+     (match (interp c env)
+       [(boolV #t) (interp t env)]
+       [(boolV #f) (interp f env)]
+       [other (error 'interp "DRMG: ~e must evaluate to a boolean value" other)])]))
 
 ;; top-interp
 ;; calls parse and interp on a given program
