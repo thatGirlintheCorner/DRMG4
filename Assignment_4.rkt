@@ -104,8 +104,13 @@
 (define (extend-env [a-names : (Listof Symbol)] [args : (Listof Value)] [clo-env : Env]) : Env
   (match* (a-names args)
     [('() '()) clo-env]
-    [('() l) (error 'extend-env "DRMG: ~e must have associated names" l)]
-    [(l '()) (error 'extend-env "DRMG: ~e must have associated values" l)]
+    [('() l)
+     (define vals : (Listof String)
+       (for/list ([i l])
+         (serialize i)))
+     (error 'extend-env "DRMG: ~e must have associated names" vals)]
+    [(l '())
+     (error 'extend-env "DRMG: ~e must have associated values" l)]
     [((cons f-names r-names) (cons f-args r-args))
      (cons (binding f-names f-args)
            (extend-env r-names r-args clo-env))]))
@@ -116,6 +121,15 @@
   (match a
     ['() '()]
     [(cons f r) (cons (idC-i f) (get-args r))]))
+
+;; data?
+;; predicate for if a given value contains data or not
+(define (data? [v : Value])
+  (match v
+    [(numV _) #t]
+    [(strV _) #t]
+    [(boolV _) #t]
+    [_ #f]))
 
 ;; apply-op
 ;; apply the primitive operations to given values
@@ -129,9 +143,21 @@
          (error 'apply-op "DRMG: cannot divide ~e by 0" a)
          (numV (/ a b)))]
     [('<= (list (numV a) (numV b))) (boolV (<= a b))]
-    #;[('substring (list (strV s) (numV start) (numV stop)))
-       (strV (substring s start stop))]
-    [('strlen (list (strV s))) (numV (string-length s))]))
+    [('substring
+      (list (strV s) (numV (? natural? start)) (numV (? natural? stop))))
+       (if (<= 0 start stop (string-length s))
+           (strV (substring s start stop))
+           (error 'apply-op "DRMG: invalid use of substring"))]
+    [('strlen (list (strV s))) (numV (string-length s))]
+    [('equal? (list a b)) (if (and (data? a) (data? b))
+                                (boolV (equal? a b))
+                                (boolV #f))]
+    [('error (list v)) (error 'apply-op "DRMG: user-error in ~e" (serialize v))]
+    [(o v)
+     (define vals : (Listof String)
+       (for/list ([i v])
+         (serialize i)))
+     (error 'apply-op "DRMG: invalid use of ~e on ~e" o vals)]))
 
 ;; parse
 
@@ -159,13 +185,14 @@
                 ;; extend current env with interpretations of args
                 (extend-env syms vals clo-env))]
        [(primV op) (apply-op op vals)]
-       [other (error 'interp "DRMG: ~e must be a valid function" other)])]
+       [other (error 'interp "DRMG: ~e must be a valid function" (serialize other))])]
     ;; ifC
     [(ifC c t f)
      (match (interp c env)
        [(boolV #t) (interp t env)]
        [(boolV #f) (interp f env)]
-       [other (error 'interp "DRMG: ~e must evaluate to a boolean value" other)])]))
+       [other (error 'interp "DRMG: ~e must evaluate to a boolean value"
+                     (serialize other))])]))
 
 (check-equal? (interp (numC 3) top-env) (numV 3))
 (check-equal? (interp (strC "hello") top-env) (strV "hello"))
@@ -185,16 +212,37 @@
 (check-equal? (interp (appC (lamC (list (idC 'x))
                                   (appC (idC '/) (list (numC 2) (idC 'x))))
                             (list (numC 1))) top-env) (numV 2))
+(check-equal? (interp (appC (idC 'equal?) (list (numC 2) (strC "hi"))) top-env)
+              (boolV #f))
+(check-equal? (interp (appC (idC 'equal?) (list (numC 2) (numC 2))) top-env)
+              (boolV #t))
+(check-equal? (interp (appC (idC 'equal?) (list
+                                           (appC (idC '<=) (list (numC 2) (numC 3)))
+                                           (numC 2))) top-env) (boolV #f))
+(check-equal? (interp (appC (idC 'equal?) (list (lamC (list (idC 'x))
+                                          (appC (idC '/) (list (numC 2) (idC 'x))))
+                                                (numC 2))) top-env) (boolV #f))
 (check-exn (regexp (regexp-quote "DRMG: cannot divide 2 by 0"))
            (lambda () (interp (appC (lamC (list (idC 'x))
                                           (appC (idC '/) (list (numC 2) (idC 'x))))
                                     (list (numC 0))) top-env)))
 (check-equal? (interp (appC (idC 'strlen) (list (strC "hello"))) top-env) (numV 5))
-(check-exn (regexp (regexp-quote "DRMG: (numV 1) must evaluate to a boolean value"))
+(check-equal? (interp
+               (appC (idC 'substring) (list (strC "hello") (numC 0) (numC 4)))
+               top-env) (strV "hell"))
+(check-exn (regexp (regexp-quote "DRMG: invalid use of substring"))
+           (lambda () (interp
+                       (appC (idC 'substring) (list (strC "hello") (numC 0) (numC 7)))
+                       top-env)))
+(check-exn (regexp (regexp-quote "DRMG: invalid use of 'strlen on '(\"2\")"))
+           (lambda () (interp
+                       (appC (idC 'strlen) (list (numC 2)))
+                       top-env)))
+(check-exn (regexp (regexp-quote "DRMG: \"1\" must evaluate to a boolean value"))
            (lambda () (interp (ifC (appC (idC '/) (list (numC 2) (numC 2)))
                                    (numC 2)
                                    (numC 1)) top-env)))
-(check-exn (regexp (regexp-quote "DRMG: (boolV #t) must be a valid function"))
+(check-exn (regexp (regexp-quote "DRMG: \"true\" must be a valid function"))
            (lambda () (interp (appC (idC 'true) (list (numC 2) (numC 2))) top-env)))
 (check-exn (regexp (regexp-quote "DRMG: 'hi not found"))
            (lambda () (interp (appC (idC '-) (list (numC 3) (idC 'hi))) top-env)))
@@ -202,7 +250,7 @@
            (lambda () (interp (appC (lamC (list (idC 'local))
                                           (appC (idC '+) (list (numC 2) (idC 'local))))
                                     (list (numC 1))) top-env)))
-(check-exn (regexp (regexp-quote "DRMG: (list (numV 2)) must have associated names"))
+(check-exn (regexp (regexp-quote "DRMG: '(\"2\") must have associated names"))
            (lambda () (interp (appC (lamC (list (idC 'x))
                                           (appC (idC '+) (list (numC 2) (idC 'x))))
                                     (list (numC 1) (numC 2))) top-env)))
@@ -210,7 +258,8 @@
            (lambda () (interp (appC (lamC (list (idC 'x) (idC 'y))
                                           (appC (idC '+) (list (idC 'x) (idC 'y))))
                                     (list (numC 1))) top-env)))
-
+(check-exn (regexp (regexp-quote "DRMG: user-error in \"1\""))
+           (lambda () (interp (appC (idC 'error) (list (numC 1))) top-env)))
 
 ;; top-interp
 ;; calls parse and interp on a given program
