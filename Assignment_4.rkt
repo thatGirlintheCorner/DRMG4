@@ -2,7 +2,8 @@
 
 (require typed/rackunit)
 
-;; PROGRESS STATEMENT GOES HERE
+;; Finished full implementation of parse and interp with environments.
+;; Implemented all primV's and tested with recursive functions.
 
 ;; DRMG4 Grammer
 ;; <expr> ::= <num>
@@ -145,13 +146,13 @@
     [('<= (list (numV a) (numV b))) (boolV (<= a b))]
     [('substring
       (list (strV s) (numV (? natural? start)) (numV (? natural? stop))))
-       (if (<= 0 start stop (string-length s))
-           (strV (substring s start stop))
-           (error 'apply-op "DRMG: invalid use of substring"))]
+     (if (<= 0 start stop (string-length s))
+         (strV (substring s start stop))
+         (error 'apply-op "DRMG: invalid use of substring"))]
     [('strlen (list (strV s))) (numV (string-length s))]
     [('equal? (list a b)) (if (and (data? a) (data? b))
-                                (boolV (equal? a b))
-                                (boolV #f))]
+                              (boolV (equal? a b))
+                              (boolV #f))]
     [('error (list v)) (error 'apply-op "DRMG: user-error in ~e" (serialize v))]
     [(o v)
      (define vals : (Listof String)
@@ -160,6 +161,65 @@
      (error 'apply-op "DRMG: invalid use of ~e on ~e" o vals)]))
 
 ;; parse
+;;parse without checking 4 duplicates
+(define (parse [s : Sexp]) : ExprC
+  (match s
+    ;; if
+    [(list 'if con ift iff) (ifC (parse con) (parse ift) (parse iff))]
+    ;; numC
+    [(? real? n) (numC n)]
+    ;; idC
+    [(? symbol? sym) (if (check-id sym) (idC sym)
+                         (error "DRMG4: Invalid id name" s))]
+    ;;StrC
+    [(? string? str) (strC str)]
+    ;;lamC
+    ;;(struct lamC ([args : (Listof idC)] [body : ExprC]) #:transparent)
+    [(list '% args ... '-> body)
+ (let ([parsed-args (for/list : (Listof idC)
+                      ([arg (cast args (Listof Sexp))])
+                      (if (idC? (parse arg))
+                          (cast (parse arg) idC)
+                          (error "DRMG4: wrong type")
+                          )
+
+                      )])
+   (if (equal? (length (remove-duplicates parsed-args))
+               (length parsed-args))
+       (lamC parsed-args (parse body))
+       (error "DRMG4: duplicate variables")))]
+    ;;local
+    #;{local
+        [z = {+ 9 14}]
+        [y = 98]
+        in
+        {+ z y}}
+    #;{{% z y -> {+ z y}}
+       {+ 9 14}
+       98}
+    ;;(struct appC ([func : ExprC] [args : (Listof ExprC)]) #:transparent)
+    [(list 'local args ... 'in body)
+ (let* ([arg-list (cast args (Listof (Listof Sexp)))]
+        [params (for/list : (Listof idC) 
+                  ([arg arg-list])
+                  (if (and (= (length arg) 3) (equal? (second arg) '=))
+                      ;; has to have 3 elements and the second must be =
+                      (cast (parse (first arg)) idC)
+                      ;; the first is the idC, the x in x = 3
+                      (error 'parse "DRMG4: Syntax error on input")))])
+   (if (equal? (length (remove-duplicates params))
+               (length params))
+       (appC (lamC params (parse body))
+             (for/list : (Listof ExprC)
+               ([arg arg-list])
+               (parse (third arg))))
+       (error 'parse "DRMG4: duplicate variables")))]
+    ;;appC
+    [(list fun args ...) (appC (parse fun)
+                               (for/list ([arg (in-list args)])
+                                 (parse arg)))]
+    ;; improper syntax
+    [e (error "DRMG4: Syntax error on input" e)]))
 
 ;; interp
 ;; interperates provided abstact sytax trees in the form of ExprC's into values
@@ -177,7 +237,7 @@
     [(appC f as)
      (define vals : (Listof Value)
        (for/list ([a as])
-         (interp a env)))
+         (interp a env))) 
      (match (interp f env)
        [(cloV syms body clo-env)
         ;; interp body w extened env
@@ -193,6 +253,23 @@
        [(boolV #f) (interp f env)]
        [other (error 'interp "DRMG: ~e must evaluate to a boolean value"
                      (serialize other))])]))
+
+;; top-interp
+;; calls parse and interp on a given program
+;; returns a string of the included ExprC's and the final result
+(define (top-interp [s : Sexp]) : String
+  (serialize (interp (parse s) top-env)))
+
+(check-equal? (top-interp '{local
+                             [fact = {% self n -> {if {<= n 0}
+                                                      1
+                                                      {* {self self {- n 1}} n}}}]
+                             in
+                             {fact fact 12}}) "479001600")
+
+(check-equal? (top-interp '{strlen "hello"}) "5")
+
+(check-equal? (top-interp '{substring "hello" 0 4}) "\"hell\"")
 
 (check-equal? (interp (numC 3) top-env) (numV 3))
 (check-equal? (interp (strC "hello") top-env) (strV "hello"))
@@ -220,7 +297,7 @@
                                            (appC (idC '<=) (list (numC 2) (numC 3)))
                                            (numC 2))) top-env) (boolV #f))
 (check-equal? (interp (appC (idC 'equal?) (list (lamC (list (idC 'x))
-                                          (appC (idC '/) (list (numC 2) (idC 'x))))
+                                                      (appC (idC '/) (list (numC 2) (idC 'x))))
                                                 (numC 2))) top-env) (boolV #f))
 (check-exn (regexp (regexp-quote "DRMG: cannot divide 2 by 0"))
            (lambda () (interp (appC (lamC (list (idC 'x))
@@ -267,11 +344,11 @@
 (check-equal? (interp tree top-env) (numV 3))
 
 #; '{local
-    [fact = {% self n -> {if {<= n 0}
-                             1
-                             {* {self self {- n 1}} n}}}]
-    in
-    {fact fact 12}}
+      [fact = {% self n -> {if {<= n 0}
+                               1
+                               {* {self self {- n 1}} n}}}]
+      in
+      {fact fact 12}}
 (define recurs (appC (lamC (list (idC 'fact))
                            (appC (idC 'fact)
                                  (list (idC 'fact) (numC 12))))
@@ -286,8 +363,53 @@
                                                   (idC 'n))))))))
 (check-equal? (interp recurs top-env) (numV 479001600))
 
-;; top-interp
-;; calls parse and interp on a given program
-;; returns a string of the included ExprC's and the final result
-#;(define (top-interp [s : Sexp]) : String
-    (serialize (interp (parse s) top-env)))
+;; tests for parse
+
+;;numC check
+(check-equal? (parse 1) (numC 1))
+;;idC check
+(check-equal? (parse 'b) (idC 'b))
+;;ifC check
+(check-equal? (parse '{if {<= 10 0}
+                         1
+                         0})
+              (ifC (appC (idC '<=) (list (numC 10) (numC 0) )) (numC 1) (numC 0)))
+;;strC check
+(check-equal? (parse "string") (strC "string"))
+;;lamC check
+;;(struct lamC ([args : (Listof idC)] [body : ExprC]) #:transparent)
+(check-equal? (parse '{% x -> {+ x 4}}) (lamC (list (idC 'x)) (appC (idC '+) (list (idC 'x) (numC 4)))))
+;;test local
+#;{local
+        [z = {+ 9 14}]
+        [y = 98]
+        in
+        {+ z y}}
+;;(struct appC ([func : ExprC] [args : (Listof ExprC)]) #:transparent)
+(check-equal? (parse '{local
+        [z = {+ 9 14}]
+        [y = 98]
+        in
+        {+ z y}})
+              (appC (lamC (list (idC 'z) (idC 'y)) (appC (idC '+) (list (idC 'z) (idC 'y))))
+                    (list (appC (idC '+) (list (numC 9) (numC 14))) (numC 98))))
+
+(check-exn (regexp (regexp-quote "DRMG4: Invalid id name 'if"))
+           (lambda () (parse '{% 'if -> {+ x 4}})))
+
+(check-exn (regexp (regexp-quote "DRMG4: wrong type"))
+           (lambda () (parse '{% 1 2 3 -> {+ x 4}})))
+
+(check-exn (regexp (regexp-quote "DRMG4: duplicate variables"))
+           (lambda () (parse '{% x x -> {+ x 4}})))
+ 
+(check-exn (regexp (regexp-quote "DRMG4: Syntax error on input"))
+           (lambda () (parse '{local [z] in {+ x 4}})))
+
+(check-exn (regexp (regexp-quote "DRMG4: Syntax error on input"))
+           (lambda () (parse '{local [z + f] [y = 1] in {+ x y}})))
+(check-exn (regexp (regexp-quote "DRMG4: duplicate variables"))
+           (lambda () (parse '{local [z = 1] [z = 1] [y = 1] in {+ x y}})))
+ 
+(check-exn (regexp (regexp-quote "DRMG4: Syntax error on input '()"))
+           (lambda () (parse '())))
