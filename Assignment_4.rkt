@@ -261,6 +261,31 @@
 (check-exn (regexp (regexp-quote "DRMG: user-error in \"1\""))
            (lambda () (interp (appC (idC 'error) (list (numC 1))) top-env)))
 
+;; '{{% a -> {a 1 2}} {% a b -> {+ a b}}}
+(define tree (appC (lamC (list (idC 'a)) (appC (idC 'a) (list (numC 1) (numC 2))))
+                   (list (lamC (list (idC 'a) (idC 'b)) (appC (idC '+) (list (idC 'a) (idC 'b)))))))
+(check-equal? (interp tree top-env) (numV 3))
+
+#; '{local
+    [fact = {% self n -> {if {<= n 0}
+                             1
+                             {* {self self {- n 1}} n}}}]
+    in
+    {fact fact 12}}
+(define recurs (appC (lamC (list (idC 'fact))
+                           (appC (idC 'fact)
+                                 (list (idC 'fact) (numC 12))))
+                     (list (lamC (list (idC 'self) (idC 'n))
+                                 (ifC (appC (idC '<=) (list (idC 'n) (numC 0)))
+                                      (numC 1)
+                                      (appC (idC '*)
+                                            (list (appC (idC 'self)
+                                                        (list (idC 'self)
+                                                              (appC (idC '-)
+                                                                    (list (idC 'n) (numC 1)))))
+                                                  (idC 'n))))))))
+(check-equal? (interp recurs top-env) (numV 479001600))
+
 ;; top-interp
 ;; calls parse and interp on a given program
 ;; returns a string of the included ExprC's and the final result
